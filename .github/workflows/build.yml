@@ -1,0 +1,82 @@
+name: Build and Release Tweak
+
+on:
+  push:
+    paths:
+      - ".github/workflows/build.yml"
+      - "control"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build tweak
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install brew gmake
+        run: brew install make
+
+      - name: Install brew dpkg
+        run: brew install dpkg
+
+      - name: Install theos
+        run: bash -c "$(curl -fsSL 'https://raw.githubusercontent.com/theos/theos/master/bin/install-theos')"
+
+      - name: Setup Theos environment
+        run: echo "THEOS=/Users/runner/theos" >> $GITHUB_ENV
+
+      - name: Make debs directory
+        run: mkdir ~/debs
+      
+      - name: Build Ding rootless
+        run: |
+          gmake -j$(sysctl -n hw.ncpu) clean do SYSROOT=$THEOS/sdks/iPhoneOS16.5.sdk
+        continue-on-error: true
+
+      - name: Add LICENSE to rootless package
+        run: |
+          cd ./packages/
+          dpkg-deb -R ./*.deb ./extracted/
+          mkdir -p ./extracted/var/jb/usr/share/doc/me.nebula.ding/
+          cp ../LICENSE ./extracted/var/jb/usr/share/doc/me.nebula.ding/
+          find . -maxdepth 1 -type f -name "*.deb" | head -n 1 > ./filename.txt
+          rm ./*.deb
+          dpkg-deb -b ./extracted/ ./tweak.deb
+          mv ./tweak.deb $(cat ./filename.txt)
+          rm ./filename.txt
+          rm -rf ./extracted/
+
+      - name: Move rootless .deb
+        run: mv ./packages/*.deb ~/debs
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ding
+          path: ~/debs/*.deb
+
+      - name: Delete old release
+        uses: dev-drprasad/delete-tag-and-release@v0.2.1
+        with:
+          delete_release: true
+          tag_name: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Get artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: ding
+          path: ./artifacts/
+
+      - name: Create new rolling release
+        uses: ncipollo/release-action@v1
+        with:
+          name: "Ding Release"
+          body: "`itsnebulalol/ding` built with GitHub Actions. The original source code is available in the Git repository located at https://github.com/itsnebulalol/ding, with modifications to the original repository outlined in this repositories `README.md`.\n\nThis/these `.deb`(s) has/have been modified to include a `LICENSE` available at `{jbroot}usr/share/doc/me.nebula.ding/LICENSE`, where `{jbroot}` is the root path for your jailbreak filesystem (`/` on rootful, `/var/jb/` on rootless, and `$(jbroot)` on roothide)."
+          artifacts: "./artifacts/*.deb"
+          tag: release
+          token: ${{ secrets.GITHUB_TOKEN }}
